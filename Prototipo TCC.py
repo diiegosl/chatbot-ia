@@ -26,7 +26,7 @@ def obter_estado_global():
     return {
         "votos": [],
         "pareceres": [],
-        "pauta": "Transição do Trabalho Presencial para Modelo Híbrido Obrigatório (2 dias no Escritório / 3 dias Remoto)"
+        "pauta": "Mudança do servidor local para servidor em nuvem"
     }
 
 estado_global = obter_estado_global()
@@ -141,7 +141,7 @@ if not client:
 MODELOS_IA = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
 
 # ---------------------------------------------------------
-# SIDEBAR (COM SINCRONIZAÇÃO DA PAUTA GLOBAL)
+# SIDEBAR (CONFIGURAÇÃO & PAINEL DE MODERADOR)
 # ---------------------------------------------------------
 st.sidebar.image("https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=600&auto=format&fit=crop", caption="Deliberação & Consenso GDSS", use_container_width=True)
 st.sidebar.markdown("## ⚙️ Configuração da Pauta")
@@ -150,10 +150,9 @@ pauta_input = st.sidebar.text_area(
     "Tema / Projeto em Debate (Sincronizado):",
     value=estado_global["pauta"],
     placeholder="Escreva aqui o tema da deliberação...",
-    height=120
+    height=100
 )
 
-# Se a pauta for alterada na barra lateral, atualiza o estado global para todos os usuários
 if pauta_input != estado_global["pauta"]:
     estado_global["pauta"] = pauta_input
     st.rerun()
@@ -161,10 +160,16 @@ if pauta_input != estado_global["pauta"]:
 pauta_atual = estado_global["pauta"]
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🗑️ Limpar Todos os Votos do Grupo", use_container_width=True):
-    estado_global["votos"].clear()
-    estado_global["pareceres"].clear()
-    st.rerun()
+st.sidebar.markdown("## 🔐 Controle do Moderador")
+senha_moderador = st.sidebar.text_input("Senha de Moderador:", type="password", placeholder="Digite a senha para gerenciar...")
+e_moderador = (senha_moderador == "admin123")
+
+if e_moderador:
+    st.sidebar.success("Modo Moderador Ativo")
+    if st.sidebar.button("🗑️ Limpar Votos e Pareceres", use_container_width=True):
+        estado_global["votos"].clear()
+        estado_global["pareceres"].clear()
+        st.rerun()
 
 # ---------------------------------------------------------
 # FUNÇÕES DE IA
@@ -389,7 +394,7 @@ with col_dash:
     # 4 ABAS SEPARADAS E DEDICADAS
     tab_pareto, tab_mediacao, tab_historico_pareceres, tab_dados = st.tabs([
         "Análise de Pareto", 
-        "🤖 Mediador IA", 
+        "🤖 Mediador IA (Moderador)", 
         "📜 Histórico de Pareceres", 
         "Histórico de Votos"
     ])
@@ -405,37 +410,40 @@ with col_dash:
 
     with tab_mediacao:
         st.subheader("🤖 Gerar Novo Parecer de Mediação")
-        st.write("Clique no botão abaixo para processar todos os votos registrados e criar uma proposta neutra baseada na Análise de Pareto.")
         
-        if st.button("Gerar e Salvar Substitutivo Oficial", use_container_width=True):
-            if df_votos.empty:
-                st.warning("⚠ Registre pelo menos um voto antes de gerar o parecer.")
-            else:
-                with st.spinner("🤖 Analisando objeções e construindo proposta neutra..."):
-                    novo_parecer = gerar_mediacao_ia(df_votos, pauta_atual)
-                    data_hora = datetime.now().strftime("%d/%m/%Y %H:%M")
-                    
-                    # Salva o parecer na lista dedicada
-                    estado_global["pareceres"].insert(0, {
-                        "data": data_hora,
-                        "qtd_votos": len(df_votos),
-                        "texto": novo_parecer
-                    })
-                    st.success("✅ Novo parecer gerado com sucesso! Acesse a aba '📜 Histórico de Pareceres' para visualizá-lo.")
-                    st.markdown("---")
-                    st.markdown(novo_parecer)
+        if e_moderador:
+            st.write("Como **Moderador**, você pode gerar a proposta de consenso para o grupo a qualquer momento com base nos votos registrados.")
+            if st.button("Gerar e Salvar Substitutivo Oficial", use_container_width=True):
+                if df_votos.empty:
+                    st.warning("⚠ Registre pelo menos um voto antes de gerar o parecer.")
+                else:
+                    with st.spinner("🤖 Analisando objeções e construindo proposta neutra..."):
+                        novo_parecer = gerar_mediacao_ia(df_votos, pauta_atual)
+                        data_hora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                        
+                        estado_global["pareceres"].insert(0, {
+                            "data": data_hora,
+                            "qtd_votos": len(df_votos),
+                            "texto": novo_parecer
+                        })
+                        st.success("✅ Novo parecer gerado e publicado na aba '📜 Histórico de Pareceres'!")
+                        st.markdown("---")
+                        st.markdown(novo_parecer)
+        else:
+            st.info("🔒 **Acesso Restrito ao Moderador:** Apenas o condutor da reunião pode acionar a geração do parecer oficial de IA. Digite a senha na barra lateral para habilitar esta função.")
+            st.write("Os participantes podem acompanhar os pareceres publicados na aba **📜 Histórico de Pareceres**.")
 
     with tab_historico_pareceres:
         st.subheader("📜 Histórico de Pareceres de Mediação")
         
         if estado_global["pareceres"]:
-            st.write(f"Total de pareceres registrados: **{len(estado_global['pareceres'])}**")
+            st.write(f"Total de pareceres registrados pelo moderador: **{len(estado_global['pareceres'])}**")
             for idx, p in enumerate(estado_global["pareceres"]):
                 numero_parecer = len(estado_global['pareceres']) - idx
-                with st.expander(f"📌 Parecer #{numero_parecer} — Gerado em {p['data']} ({p['qtd_votos']} votos considerados)", expanded=(idx == 0)):
+                with st.expander(f"📌 Parecer #{numero_parecer} — Publicado em {p['data']} ({p['qtd_votos']} votos considerados)", expanded=(idx == 0)):
                     st.markdown(p["texto"])
         else:
-            st.info("ℹ️ Nenhum parecer foi salvo até o momento. Gere um parecer na aba **🤖 Mediador IA** para salvá-lo aqui.")
+            st.info("ℹ️ Nenhum parecer foi publicado pelo moderador até o momento. Acompanhe a deliberação!")
 
     with tab_dados:
         st.subheader("📋 Registro Geral de Votos")
