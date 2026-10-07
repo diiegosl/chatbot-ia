@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -17,14 +18,17 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# BANCO DE DADOS EM MEMÓRIA COMPARTILHADA (GLOBAL PARA TODOS OS USUÁRIOS)
+# BANCO DE DADOS EM MEMÓRIA COMPARTILHADA (GLOBAL)
 # ---------------------------------------------------------
 @st.cache_resource
-def obter_banco_de_dados_global():
-    """Retorna uma lista global compartilhada entre todas as conexões/usuários."""
-    return []
+def obter_estado_global():
+    """Retorna o estado global compartilhado entre todos os usuários."""
+    return {
+        "votos": [],
+        "pareceres": []
+    }
 
-votos_globais = obter_banco_de_dados_global()
+estado_global = obter_estado_global()
 
 # ---------------------------------------------------------
 # INJEÇÃO DE CSS CUSTOMIZADO
@@ -108,7 +112,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# GERENCIAMENTO 100% SEGURO DA API KEY
+# GERENCIAMENTO SEGURO DA API KEY
 # ---------------------------------------------------------
 def obter_api_key_segura() -> str:
     try:
@@ -150,11 +154,12 @@ pauta_atual = st.sidebar.text_area(
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🗑️ Limpar Todos os Votos do Grupo", use_container_width=True):
-    votos_globais.clear()
+    estado_global["votos"].clear()
+    estado_global["pareceres"].clear()
     st.rerun()
 
 # ---------------------------------------------------------
-# FUNÇÕES DE IA
+# FUNÇÕES DE IA COM TEMPERATURE=0.0 (CONSISTÊNCIA)
 # ---------------------------------------------------------
 def chamar_gemini_com_fallback(prompt: str) -> str:
     if not client:
@@ -165,7 +170,8 @@ def chamar_gemini_com_fallback(prompt: str) -> str:
         try:
             response = client.models.generate_content(
                 model=modelo,
-                contents=prompt
+                contents=prompt,
+                config={"temperature": 0.0}  # Respostas determinísticas e padronizadas
             )
             return response.text.strip()
         except Exception as e:
@@ -353,7 +359,7 @@ with col_form:
             else:
                 with st.spinner("🤖 Processando voto e categorizando argumento..."):
                     categoria_ia = classificar_objecao_dinamica(comentario, pauta_atual, opcao)
-                    votos_globais.append({
+                    estado_global["votos"].append({
                         "usuario": nome,
                         "opcao": opcao,
                         "objecao": categoria_ia,
@@ -365,13 +371,14 @@ with col_form:
 with col_dash:
     st.markdown("### 📊 Painel Analítico & Consenso (Global)")
     
-    # Atualiza em tempo real com os votos acumulados de todos os participantes
-    if st.button("🔄 Atualizar Votos do Grupo", use_container_width=False):
-        st.rerun()
+    col_btn1, col_btn2 = st.columns([1, 1])
+    with col_btn1:
+        if st.button("🔄 Atualizar Painel", use_container_width=True):
+            st.rerun()
 
-    df_votos = pd.DataFrame(votos_globais)
+    df_votos = pd.DataFrame(estado_global["votos"])
 
-    tab_pareto, tab_mediacao, tab_dados = st.tabs(["Análise de Pareto", "🤖 Mediador IA", "Histórico de Votos"])
+    tab_pareto, tab_mediacao, tab_dados = st.tabs(["Análise de Pareto", "🤖 Mediador IA & Histórico", "Histórico de Votos"])
 
     with tab_pareto:
         fig = gerar_grafico_pareto(df_votos)
@@ -383,11 +390,30 @@ with col_dash:
             st.info("Cadastre os primeiros votos para gerar o Painel de Pareto.")
 
     with tab_mediacao:
-        st.subheader("🤖 Parecer Neutro & Proposta de Compromisso")
-        if st.button("Gerar Substitutivo com IA", use_container_width=True):
-            with st.spinner("🤖 Analisando objeções de todos os participantes e construindo proposta neutra..."):
-                parecer = gerar_mediacao_ia(df_votos, pauta_atual)
-                st.markdown(parecer)
+        st.subheader("🤖 Gerar Novo Parecer de Mediação")
+        if st.button("Gerar e Salvar Substitutivo Oficial", use_container_width=True):
+            with st.spinner("🤖 Analisando objeções e construindo proposta neutra..."):
+                novo_parecer = gerar_mediacao_ia(df_votos, pauta_atual)
+                data_hora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                
+                # Salva o parecer no histórico global com timestamp
+                estado_global["pareceres"].insert(0, {
+                    "data": data_hora,
+                    "qtd_votos": len(df_votos),
+                    "texto": novo_parecer
+                })
+                st.success("Novo parecer gerado e registrado no histórico!")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("📜 Histórico de Pareceres Salvos")
+        
+        if estado_global["pareceres"]:
+            for idx, p in enumerate(estado_global["pareceres"]):
+                with st.expander(f"📌 Parecer #{len(estado_global['pareceres']) - idx} - {p['data']} ({p['qtd_votos']} votos considerados)", expanded=(idx == 0)):
+                    st.markdown(p["texto"])
+        else:
+            st.info("Nenhum parecer foi salvo ainda nesta sessão. Clique no botão acima para gerar a primeira mediação.")
 
     with tab_dados:
         st.dataframe(df_votos, use_container_width=True)
