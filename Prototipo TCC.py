@@ -6,6 +6,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from google import genai
+from pydantic import BaseModel, Field
+from typing import List
 
 # ---------------------------------------------------------
 # CONFIGURAÇÃO DE PÁGINA
@@ -138,7 +140,29 @@ except Exception:
 if not client:
     st.warning("🔑 **API Key não detectada!** Configure em **Advanced Settings > Secrets** no Streamlit Cloud com a variável `GEMINI_API_KEY`.")
 
-MODELOS_IA = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+MODELOS_IA = ["gemini-2.5-flash", "gemini-2.5-pro"]
+
+# ---------------------------------------------------------
+# MODELOS DE SAÍDA ESTRUTURADA (PYDANTIC) FORÇADOS PELA IA
+# ---------------------------------------------------------
+class EixoObjecaoPareto(BaseModel):
+    titulo: str = Field(description="Título curto do eixo de objeção (Ex: Risco Financeiro e Custos, Segurança da Informação).")
+    participantes: str = Field(description="Nomes dos participantes que levantaram essa objeção (Ex: Eng. Gustavo e Mathsu).")
+    problema_detalhado: str = Field(description="O problema central ou apreensão descrita pelo grupo.")
+
+class FaseProposta(BaseModel):
+    fase: str = Field(description="Identificação numérica e nome da fase (Ex: Fase 1: Migração Piloto e Não Crítica).")
+    tempo: str = Field(description="Intervalo de tempo sugerido para a fase (Ex: Meses 1 a 6).")
+    acoes: str = Field(description="Ações práticas que devem ser executadas nesta etapa.")
+    objetivo: str = Field(description="O objetivo técnico ou a justificativa para essa fase.")
+
+class EstruturaMediacaoGDSS(BaseModel):
+    introducao: str = Field(description="Texto de abertura do mediador imparcial contextualizando os votos recebidos.")
+    desvios_pauta: List[str] = Field(description="Lista de argumentos ou tópicos que foram citados mas desconsiderados por fugirem da pauta central (Ex: discussões de home office em pauta de servidores).")
+    eixos_pareto: List[EixoObjecaoPareto] = Field(description="Exatamente os 2 maiores eixos de objeção mapeados pelo Princípio de Pareto.")
+    proposta_compromisso_titulo: str = Field(description="Nome estratégico da proposta neutra (Ex: Estratégia de Migração Híbrida e Fasedada).")
+    proposta_compromisso_fases: List[FaseProposta] = Field(description="O cronograma/plano de ação dividido em fases lógicas para solucionar o impasse.")
+    justificativa_conclusao: str = Field(description="Texto final ponderando por que essa proposta concilia os interesses divergentes de forma justa.")
 
 # ---------------------------------------------------------
 # SIDEBAR (CONFIGURAÇÃO & PAINEL DE MODERADOR)
@@ -230,43 +254,47 @@ def classificar_objecao_dinamica(comentario: str, pauta: str, opcao_voto: str) -
         else:
             return "Outras Objeções"
 
-def gerar_mediacao_ia(df_votos: pd.DataFrame, pauta: str) -> str:
+def gerar_mediacao_ia_estruturada(df_votos: pd.DataFrame, pauta: str) -> dict:
     if df_votos.empty:
-        return "Nenhum voto registrado para gerar mediação."
+        return {}
 
     resumo_votos = df_votos[["usuario", "opcao", "objecao", "argumento"]].to_dict(orient="records")
     pauta_texto = pauta.strip() if pauta.strip() else "Pauta Geral em Deliberação"
 
     prompt = f"""
-    Você é um mediador imparcial num GDSS.
+    Você é um mediador imparcial atuando em um Sistema de Apoio à Decisão em Grupo (GDSS).
+    Analise os votos, objeções e argumentos apresentados pela equipe e gere uma síntese estruturada.
     
-    PAUTA: "{pauta_texto}"
-    VOTOS: {json.dumps(resumo_votos, ensure_ascii=False)}
+    PAUTA DO DEBATE: "{pauta_texto}"
+    VOTOS REGISTRADOS: {json.dumps(resumo_votos, ensure_ascii=False)}
 
-    TAREFA:
-    1. Resuma os 2 maiores focos de objeção (Análise de Pareto).
-    2. Proponha uma Proposta de Compromisso neutra e viável.
+    ORIENTAÇÕES DE NEGOCIAÇÃO:
+    - Ignore ruídos e identifique desvios conceituais na pauta (Ex: se falarem de home office ou dias prescenciais em uma pauta estrita sobre servidores/infraestrutura, registre na lista de desvios).
+    - Agrupe as principais dores nos 2 maiores eixos críticos de acordo com o Princípio de Pareto (regra 80/20).
+    - Proponha um plano de compromisso neutro, viável e fasedado que mitigue os riscos do grupo conservador sem travar a inovação tecnológica.
     """
 
-    try:
-        return chamar_gemini_com_fallback(prompt)
-    except Exception as e:
-        st.error(f"⚠ Falha na chamada da IA: {e}")
-        
-        df_obj = df_votos[df_votos["objecao"] != "Sem objeções relevantes"]
-        top_objecoes = df_obj["objecao"].value_counts().head(2).index.tolist() if not df_obj.empty else ["Operação", "Orçamento"]
-        obj_str = " e ".join(top_objecoes)
+    if not client:
+        raise RuntimeError("Cliente Gemini não inicializado.")
 
-        return f"""
-        ### ℹ️ Parecer de Mediação (Modo de Contingência Local)
-        
-        **1. Principais Pontos de Divergência (Análise de Pareto):**
-        * Objeções prioritárias no grupo: **{obj_str}**.
-        
-        **2. Proposta de Compromisso Recomendada:**
-        * **Implantação Piloto:** Período experimental de 90 dias com revisões mensais.
-        * **Comitê de Acompanhamento:** Criação de grupo de trabalho com líderes operacionais e técnicos.
-        """
+    ultimo_erro = None
+    for modelo in MODELOS_IA:
+        try:
+            response = client.models.generate_content(
+                model=modelo,
+                contents=prompt,
+                config={
+                    "temperature": 0.1,
+                    "response_mime_type": "application/json",
+                    "response_schema": EstruturaMediacaoGDSS
+                }
+            )
+            return json.loads(response.text.strip())
+        except Exception as e:
+            ultimo_erro = e
+            continue
+
+    raise ultimo_erro
 
 # ---------------------------------------------------------
 # GRÁFICO DE PARETO
@@ -391,7 +419,6 @@ with col_dash:
 
     df_votos = pd.DataFrame(estado_global["votos"])
 
-    # 4 ABAS SEPARADAS E DEDICADAS
     tab_pareto, tab_mediacao, tab_historico_pareceres, tab_dados = st.tabs([
         "Análise de Pareto", 
         "🤖 Mediador IA (Moderador)", 
@@ -417,18 +444,20 @@ with col_dash:
                 if df_votos.empty:
                     st.warning("⚠ Registre pelo menos um voto antes de gerar o parecer.")
                 else:
-                    with st.spinner("🤖 Analisando objeções e construindo proposta neutra..."):
-                        novo_parecer = gerar_mediacao_ia(df_votos, pauta_atual)
-                        data_hora = datetime.now().strftime("%d/%m/%Y %H:%M")
-                        
-                        estado_global["pareceres"].insert(0, {
-                            "data": data_hora,
-                            "qtd_votos": len(df_votos),
-                            "texto": novo_parecer
-                        })
-                        st.success("✅ Novo parecer gerado e publicado na aba '📜 Histórico de Pareceres'!")
-                        st.markdown("---")
-                        st.markdown(novo_parecer)
+                    with st.spinner("🤖 Analisando objeções e construindo proposta estruturada..."):
+                        try:
+                            json_parecer = gerar_mediacao_ia_estruturada(df_votos, pauta_atual)
+                            data_hora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                            
+                            estado_global["pareceres"].insert(0, {
+                                "data": data_hora,
+                                "qtd_votos": len(df_votos),
+                                "dados": json_parecer
+                            })
+                            st.success("✅ Novo parecer estruturado gerado e publicado com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao processar chamada estruturada da IA: {e}")
         else:
             st.info("🔒 **Acesso Restrito ao Moderador:** Apenas o condutor da reunião pode acionar a geração do parecer oficial de IA. Digite a senha na barra lateral para habilitar esta função.")
             st.write("Os participantes podem acompanhar os pareceres publicados na aba **📜 Histórico de Pareceres**.")
@@ -438,13 +467,69 @@ with col_dash:
         
         if estado_global["pareceres"]:
             st.write(f"Total de pareceres registrados pelo moderador: **{len(estado_global['pareceres'])}**")
+            
             for idx, p in enumerate(estado_global["pareceres"]):
                 numero_parecer = len(estado_global['pareceres']) - idx
+                dados = p["dados"]
+                
                 with st.expander(f"📌 Parecer #{numero_parecer} — Publicado em {p['data']} ({p['qtd_votos']} votos considerados)", expanded=(idx == 0)):
-                    st.markdown(p["texto"])
+                    
+                    # 1. Introdução do Mediador
+                    st.markdown(f"*{dados.get('introducao', '')}*")
+                    
+                    # 2. Ressalvas de Desvio
+                    if dados.get("desvios_pauta"):
+                        st.write("")
+                        with st.container(border=True):
+                            st.markdown("⚠️ **Ressalvas do Mediador (Argumentos Ignorados por Desvio de Escopo):**")
+                            for desvio in dados["desvios_pauta"]:
+                                st.markdown(f"- *{desvio}*")
+                    
+                    # 3. Objeções de Pareto Reais Rendidas Lado a Lado
+                    st.markdown("#### 📊 Eixos Críticos de Objeção (Pareto 80/20)")
+                    eixos = dados.get("eixos_pareto", [])
+                    
+                    if len(eixos) >= 2:
+                        col_eixo1, col_eixo2 = st.columns(2)
+                        with col_eixo1:
+                            st.error(f"**{eixos[0]['titulo']}**")
+                            st.caption(f"Manifestado por: {eixos[0]['participantes']}")
+                            st.write(eixos[0]['problema_detalhado'])
+                        with col_eixo2:
+                            st.error(f"**{eixos[1]['titulo']}**")
+                            st.caption(f"Manifestado por: {eixos[1]['participantes']}")
+                            st.write(eixos[1]['problema_detalhado'])
+                    else:
+                        for eixo in eixos:
+                            st.error(f"**{eixo['titulo']}**")
+                            st.caption(f"Manifestado por: {eixo['participantes']}")
+                            st.write(eixo['problema_detalhado'])
+
+                    st.divider()
+                    
+                    # 4. Plano de Compromisso Estruturado em Fases
+                    st.markdown(f"### 💡 Proposta de Compromisso: *{dados.get('proposta_compromisso_titulo', 'Estratégia Substitutiva')}*")
+                    
+                    for fase in dados.get("proposta_compromisso_fases", []):
+                        with st.container(border=True):
+                            col_fase_tit, col_fase_tempo = st.columns([3, 1])
+                            with col_fase_tit:
+                                st.markdown(f"🔹 **{fase['fase']}**")
+                            with col_fase_tempo:
+                                st.markdown(f"⏱️ `{fase['tempo']}`")
+                            
+                            st.markdown(f"**Ações Operacionais:** {fase['acoes']}")
+                            st.markdown(f"🎯 *Objetivo da Etapa:* {fase['objective' if 'objective' in fase else 'objetivo']}")
+                    
+                    # 5. Justificativa Final
+                    st.write("")
+                    st.info(dados.get("justificativa_conclusao", ""))
         else:
             st.info("ℹ️ Nenhum parecer foi publicado pelo moderador até o momento. Acompanhe a deliberação!")
 
     with tab_dados:
         st.subheader("📋 Registro Geral de Votos")
-        st.dataframe(df_votos, use_container_width=True)
+        if not df_votos.empty:
+            st.dataframe(df_votos, use_container_width=True)
+        else:
+            st.info("Nenhum voto registrado no banco de dados local.")
