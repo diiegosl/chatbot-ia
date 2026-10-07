@@ -17,7 +17,17 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# INJEÇÃO DE CSS CUSTOMIZADO (ALTO CONTRASTE E LEGIBILIDADE)
+# BANCO DE DADOS EM MEMÓRIA COMPARTILHADA (GLOBAL PARA TODOS OS USUÁRIOS)
+# ---------------------------------------------------------
+@st.cache_resource
+def obter_banco_de_dados_global():
+    """Retorna uma lista global compartilhada entre todas as conexões/usuários."""
+    return []
+
+votos_globais = obter_banco_de_dados_global()
+
+# ---------------------------------------------------------
+# INJEÇÃO DE CSS CUSTOMIZADO
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -100,22 +110,18 @@ st.markdown("""
 # ---------------------------------------------------------
 # GERENCIAMENTO 100% SEGURO DA API KEY
 # ---------------------------------------------------------
-
-
 def obter_api_key_segura() -> str:
-    """Carrega a API key das variáveis de ambiente ou do st.secrets."""
-    env_key = os.getenv("GEMINI_API_KEY")
-    if env_key:
-        return env_key
-
     try:
-        if "GEMINI_API_KEY" in st.secrets:
-            return st.secrets["GEMINI_API_KEY"]
+        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+            return str(st.secrets["GEMINI_API_KEY"]).strip()
     except Exception:
         pass
 
-    return ""
+    env_key = os.getenv("GEMINI_API_KEY")
+    if env_key:
+        return env_key.strip()
 
+    return ""
 
 API_KEY = obter_api_key_segura()
 
@@ -124,21 +130,15 @@ try:
 except Exception:
     client = None
 
-# Mensagem de alerta visual caso a chave não esteja configurada
 if not client:
-    st.warning("🔑 **API Key não detectada!** Crie o ficheiro `.streamlit/secrets.toml` com a variável `GEMINI_API_KEY` para ativar a Inteligência Artificial.")
+    st.warning("🔑 **API Key não detectada!** Configure em **Advanced Settings > Secrets** no Streamlit Cloud com a variável `GEMINI_API_KEY`.")
 
-if "votos" not in st.session_state:
-    st.session_state.votos = []
-
-# MODELOS ATUALIZADOS CONFORME RECOMENDAÇÃO DA API DO GEMINI
 MODELOS_IA = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
 
 # ---------------------------------------------------------
 # SIDEBAR
 # ---------------------------------------------------------
-st.sidebar.image("https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=600&auto=format&fit=crop",
-                 caption="Deliberação & Consenso GDSS", use_container_width=True)
+st.sidebar.image("https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=600&auto=format&fit=crop", caption="Deliberação & Consenso GDSS", use_container_width=True)
 st.sidebar.markdown("## ⚙️ Configuração da Pauta")
 
 pauta_atual = st.sidebar.text_area(
@@ -149,19 +149,16 @@ pauta_atual = st.sidebar.text_area(
 )
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🗑️ Limpar Todos os Votos", use_container_width=True):
-    st.session_state.votos = []
+if st.sidebar.button("🗑️ Limpar Todos os Votos do Grupo", use_container_width=True):
+    votos_globais.clear()
     st.rerun()
 
 # ---------------------------------------------------------
 # FUNÇÕES DE IA
 # ---------------------------------------------------------
-
-
 def chamar_gemini_com_fallback(prompt: str) -> str:
     if not client:
-        raise RuntimeError(
-            "Cliente Gemini não inicializado. Configure a API Key no ficheiro .streamlit/secrets.toml.")
+        raise RuntimeError("Cliente Gemini não inicializado.")
 
     ultimo_erro = None
     for modelo in MODELOS_IA:
@@ -176,7 +173,6 @@ def chamar_gemini_com_fallback(prompt: str) -> str:
             continue
 
     raise ultimo_erro
-
 
 def classificar_objecao_dinamica(comentario: str, pauta: str, opcao_voto: str) -> str:
     if not comentario.strip() or opcao_voto in ["Concordo Totalmente", "Aprovar na Íntegra"]:
@@ -200,8 +196,7 @@ def classificar_objecao_dinamica(comentario: str, pauta: str, opcao_voto: str) -
 
     try:
         categoria = chamar_gemini_com_fallback(prompt)
-        categoria_limpa = categoria.replace('"', '').replace(
-            "'", "").replace(".", "").strip()
+        categoria_limpa = categoria.replace('"', '').replace("'", "").replace(".", "").strip()
         return categoria_limpa if categoria_limpa else "Impacto Operacional"
     except Exception:
         texto = comentario.lower()
@@ -216,13 +211,11 @@ def classificar_objecao_dinamica(comentario: str, pauta: str, opcao_voto: str) -
         else:
             return "Outras Objeções"
 
-
 def gerar_mediacao_ia(df_votos: pd.DataFrame, pauta: str) -> str:
     if df_votos.empty:
         return "Nenhum voto registrado para gerar mediação."
 
-    resumo_votos = df_votos[["usuario", "opcao",
-                             "objecao", "argumento"]].to_dict(orient="records")
+    resumo_votos = df_votos[["usuario", "opcao", "objecao", "argumento"]].to_dict(orient="records")
     pauta_texto = pauta.strip() if pauta.strip() else "Pauta Geral em Deliberação"
 
     prompt = f"""
@@ -240,10 +233,9 @@ def gerar_mediacao_ia(df_votos: pd.DataFrame, pauta: str) -> str:
         return chamar_gemini_com_fallback(prompt)
     except Exception as e:
         st.error(f"⚠ Falha na chamada da IA: {e}")
-
+        
         df_obj = df_votos[df_votos["objecao"] != "Sem objeções relevantes"]
-        top_objecoes = df_obj["objecao"].value_counts().head(
-            2).index.tolist() if not df_obj.empty else ["Operação", "Orçamento"]
+        top_objecoes = df_obj["objecao"].value_counts().head(2).index.tolist() if not df_obj.empty else ["Operação", "Orçamento"]
         obj_str = " e ".join(top_objecoes)
 
         return f"""
@@ -258,10 +250,8 @@ def gerar_mediacao_ia(df_votos: pd.DataFrame, pauta: str) -> str:
         """
 
 # ---------------------------------------------------------
-# GRÁFICO DE PARETO ESTILIZADO
+# GRÁFICO DE PARETO
 # ---------------------------------------------------------
-
-
 def gerar_grafico_pareto(df_votos: pd.DataFrame):
     if df_votos.empty:
         return None
@@ -272,12 +262,10 @@ def gerar_grafico_pareto(df_votos: pd.DataFrame):
 
     contagem = df_obj["objecao"].value_counts().reset_index()
     contagem.columns = ["Objeção", "Frequência"]
-    contagem = contagem.sort_values(
-        by="Frequência", ascending=False).reset_index(drop=True)
+    contagem = contagem.sort_values(by="Frequência", ascending=False).reset_index(drop=True)
 
     total = contagem["Frequência"].sum()
-    contagem["Percentual_Acumulado"] = (
-        contagem["Frequência"].cumsum() / total) * 100
+    contagem["Percentual_Acumulado"] = (contagem["Frequência"].cumsum() / total) * 100
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -315,8 +303,7 @@ def gerar_grafico_pareto(df_votos: pd.DataFrame):
     )
 
     fig.update_layout(
-        title=dict(text="<b>Análise de Pareto:</b> Objeções Relevantes Identificadas",
-                   font=dict(size=16, color="#0F172A")),
+        title=dict(text="<b>Análise de Pareto:</b> Objeções Relevantes Identificadas", font=dict(size=16, color="#0F172A")),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
@@ -324,15 +311,12 @@ def gerar_grafico_pareto(df_votos: pd.DataFrame):
         margin=dict(l=20, r=20, t=50, b=20),
         font=dict(color="#334155")
     )
-
+    
     fig.update_xaxes(showgrid=False, color="#334155")
-    fig.update_yaxes(title_text="Quantidade", showgrid=True,
-                     gridcolor="#E2E8F0", secondary_y=False, dtick=1)
-    fig.update_yaxes(title_text="% Acumulado", range=[
-                     0, 105], showgrid=False, secondary_y=True)
+    fig.update_yaxes(title_text="Quantidade", showgrid=True, gridcolor="#E2E8F0", secondary_y=False, dtick=1)
+    fig.update_yaxes(title_text="% Acumulado", range=[0, 105], showgrid=False, secondary_y=True)
 
     return fig
-
 
 # ---------------------------------------------------------
 # INTERFACE PRINCIPAL
@@ -341,8 +325,7 @@ st.title("🏛️ GDSS Universal - Suporte à Decisão Coletiva")
 st.markdown("Sistema Inteligente de Gestão de Debates, Análise de Objeções e Mediação por Inteligência Artificial.")
 st.write("")
 
-titulo_pauta = pauta_atual.strip() if pauta_atual.strip(
-) else "Defina o tema da pauta na barra lateral."
+titulo_pauta = pauta_atual.strip() if pauta_atual.strip() else "Defina o tema da pauta na barra lateral."
 st.markdown(f"""
 <div class="pauta-card">
     <div style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.9;">Pauta em Debate Atual</div>
@@ -355,57 +338,54 @@ col_form, col_dash = st.columns([1, 2], gap="large")
 with col_form:
     st.markdown("### 🗳️ Registrar Posição")
     with st.form("form_politico", clear_on_submit=True):
-        nome = st.text_input("Nome / Representante:",
-                             placeholder="Ex: Dra. Helena (Consultoria)")
+        nome = st.text_input("Nome / Representante:", placeholder="Ex: Dra. Helena (Consultoria)")
         opcao = st.radio(
             "Sua posição sobre o projeto:",
             ["Aprovar na Íntegra", "Aprovar com Emendas", "Rejeitar Projeto"]
         )
-        comentario = st.text_area("Justificativa / Comentários Livres:",
-                                  placeholder="Explique os motivos da sua decisão...")
+        comentario = st.text_area("Justificativa / Comentários Livres:", placeholder="Explique os motivos da sua decisão...")
 
-        btn_voto = st.form_submit_button(
-            "Submeter Voto", use_container_width=True)
+        btn_voto = st.form_submit_button("Submeter Voto", use_container_width=True)
 
         if btn_voto and nome:
             if not pauta_atual.strip():
                 st.warning("⚠ Defina o tema da pauta antes de submeter.")
             else:
                 with st.spinner("🤖 Processando voto e categorizando argumento..."):
-                    categoria_ia = classificar_objecao_dinamica(
-                        comentario, pauta_atual, opcao)
-                    st.session_state.votos.append({
+                    categoria_ia = classificar_objecao_dinamica(comentario, pauta_atual, opcao)
+                    votos_globais.append({
                         "usuario": nome,
                         "opcao": opcao,
                         "objecao": categoria_ia,
                         "argumento": comentario
                     })
-                    st.success(
-                        f"Voto registrado! Categoria: **{categoria_ia}**")
+                    st.success(f"Voto de **{nome}** registrado no painel global! Categoria: **{categoria_ia}**")
                     st.rerun()
 
 with col_dash:
-    st.markdown("### 📊 Painel Analítico & Consenso")
-    df_votos = pd.DataFrame(st.session_state.votos)
+    st.markdown("### 📊 Painel Analítico & Consenso (Global)")
+    
+    # Atualiza em tempo real com os votos acumulados de todos os participantes
+    if st.button("🔄 Atualizar Votos do Grupo", use_container_width=False):
+        st.rerun()
 
-    tab_pareto, tab_mediacao, tab_dados = st.tabs(
-        ["Análise de Pareto", "🤖 Mediador IA", "Histórico de Votos"])
+    df_votos = pd.DataFrame(votos_globais)
+
+    tab_pareto, tab_mediacao, tab_dados = st.tabs(["Análise de Pareto", "🤖 Mediador IA", "Histórico de Votos"])
 
     with tab_pareto:
         fig = gerar_grafico_pareto(df_votos)
         if fig:
             st.plotly_chart(fig, use_container_width=True)
-            st.info("💡 **Princípio de Pareto (80/20):** Foque a discussão nas objeções à esquerda da linha pontilhada verde para resolver a maioria dos conflitos do grupo.")
+            st.info("💡 **Princípio de Pareto (80/20):** Foque a discussão nas objeções à esquerda para resolver a maioria dos conflitos do grupo.")
         else:
-            st.image("https://images.unsplash.com/photo-1531403009284-440f080d1e12?q=80&w=800&auto=format&fit=crop",
-                     caption="Aguardando registros de voto para gerar o gráfico.", use_container_width=True)
-            st.info(
-                "Cadastre os primeiros votos no formulário ao lado para gerar o Painel de Pareto.")
+            st.image("https://images.unsplash.com/photo-1531403009284-440f080d1e12?q=80&w=800&auto=format&fit=crop", caption="Aguardando registros de voto para gerar o gráfico.", use_container_width=True)
+            st.info("Cadastre os primeiros votos para gerar o Painel de Pareto.")
 
     with tab_mediacao:
         st.subheader("🤖 Parecer Neutro & Proposta de Compromisso")
         if st.button("Gerar Substitutivo com IA", use_container_width=True):
-            with st.spinner("🤖 Analisando objeções e construindo proposta neutra..."):
+            with st.spinner("🤖 Analisando objeções de todos os participantes e construindo proposta neutra..."):
                 parecer = gerar_mediacao_ia(df_votos, pauta_atual)
                 st.markdown(parecer)
 
