@@ -25,7 +25,8 @@ def obter_estado_global():
     """Retorna o estado global compartilhado entre todos os usuários."""
     return {
         "votos": [],
-        "pareceres": []
+        "pareceres": [],
+        "pauta": "Transição do Trabalho Presencial para Modelo Híbrido Obrigatório (2 dias no Escritório / 3 dias Remoto)"
     }
 
 estado_global = obter_estado_global()
@@ -140,17 +141,24 @@ if not client:
 MODELOS_IA = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
 
 # ---------------------------------------------------------
-# SIDEBAR
+# SIDEBAR (COM SINCRONIZAÇÃO DA PAUTA GLOBAL)
 # ---------------------------------------------------------
 st.sidebar.image("https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=600&auto=format&fit=crop", caption="Deliberação & Consenso GDSS", use_container_width=True)
 st.sidebar.markdown("## ⚙️ Configuração da Pauta")
 
-pauta_atual = st.sidebar.text_area(
-    "Tema / Projeto em Debate:",
-    value="Transição do Trabalho Presencial para Modelo Híbrido Obrigatório (2 dias no Escritório / 3 dias Remoto)",
+pauta_input = st.sidebar.text_area(
+    "Tema / Projeto em Debate (Sincronizado):",
+    value=estado_global["pauta"],
     placeholder="Escreva aqui o tema da deliberação...",
     height=120
 )
+
+# Se a pauta for alterada na barra lateral, atualiza o estado global para todos os usuários
+if pauta_input != estado_global["pauta"]:
+    estado_global["pauta"] = pauta_input
+    st.rerun()
+
+pauta_atual = estado_global["pauta"]
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🗑️ Limpar Todos os Votos do Grupo", use_container_width=True):
@@ -339,7 +347,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# DIVISÃO DAS COLUNAS DA INTERFACE
 col_form, col_dash = st.columns([1, 2], gap="large")
 
 with col_form:
